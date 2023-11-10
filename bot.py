@@ -4,8 +4,6 @@ from dotenv import load_dotenv
 import os
 from datetime import datetime
 
-
-
 load_dotenv()
 
 LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID')
@@ -35,8 +33,32 @@ async def on_member_remove(member):
 @bot.event
 async def on_voice_state_update(member, before, after):
     log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
-    admin_roles = ['Administrators', 'Administrators', 'Developers', 'move role'] # List of admin role names
-    
+    admin_roles = ['Administrators', 'Developers', 'move role']  # List of admin role names
+
+    # Check if the user was self-muted or self-deafened
+    if before.self_mute != after.self_mute:
+        if after.self_mute:
+            message = f"{member.mention} self-muted."
+        else:
+            message = f"{member.mention} self-unmuted."
+
+        embed = discord.Embed(title="User Action", description=message, color=discord.Color.green())
+        embed.timestamp = datetime.utcnow()
+        log_channel = bot.get_channel(log_channel_id)
+        await log_channel.send(embed=embed)
+
+    if before.self_deaf != after.self_deaf:
+        if after.self_deaf:
+            message = f"{member.mention} self-deafened."
+        else:
+            message = f"{member.mention} self-undeafened."
+
+        embed = discord.Embed(title="User Action", description=message, color=discord.Color.green())
+        embed.timestamp = datetime.utcnow()
+        log_channel = bot.get_channel(log_channel_id)
+        await log_channel.send(embed=embed)
+
+    # Check if the user was moved to a different channel
     if before.channel != after.channel:
         if before.channel:
             # User left the channel
@@ -44,22 +66,35 @@ async def on_voice_state_update(member, before, after):
         if after.channel:
             # User joined the channel
             message = f"{member.mention} joined voice channel {after.channel.name}."
-    else:
-        # User moved to a different voice channel
-        message = f"{member.mention} moved from {before.channel.name} to {after.channel.name}."
-        
-    # Check if admin moved or disconnected someone
-    if any(role.name in admin_roles for role in member.roles):
-        embed = discord.Embed(title="Admin Action", description=message, color=discord.Color.blue())
-    else:
+
         embed = discord.Embed(title="User Action", description=message, color=discord.Color.green())
+        embed.timestamp = datetime.utcnow()
+        log_channel = bot.get_channel(log_channel_id)
+        await log_channel.send(embed=embed)
 
-    # Add timestamp
-    embed.timestamp = datetime.utcnow()
+    # Check if someone else (admin) muted or deafened the user
+    if any(role.name in admin_roles for role in member.roles):
+        if before.mute != after.mute:
+            if after.mute:
+                message = f"{member.mention} was server-muted by an admin."
+            else:
+                message = f"{member.mention} was server-unmuted by an admin."
 
-    # Send message to log channel
-    log_channel = bot.get_channel(log_channel_id)
-    await log_channel.send(embed=embed)
+            embed = discord.Embed(title="Admin Action", description=message, color=discord.Color.blue)
+            embed.timestamp = datetime.utcnow()
+            log_channel = bot.get_channel(log_channel_id)
+            await log_channel.send(embed=embed)
+
+        if before.deaf != after.deaf:
+            if after.deaf:
+                message = f"{member.mention} was server-deafened by an admin."
+            else:
+                message = f"{member.mention} was server-undeafened by an admin."
+
+            embed = discord.Embed(title="Admin Action", description=message, color=discord.Color.blue)
+            embed.timestamp = datetime.utcnow()
+            log_channel = bot.get_channel(log_channel_id)
+            await log_channel.send(embed=embed)
 
 @bot.event
 async def on_message_edit(before, after):
@@ -83,25 +118,104 @@ async def on_message_delete(message):
 @bot.event
 async def on_raw_message_edit(payload):
     # Check if the message was edited by the bot or if the message is from a DM
-    if payload.author.bot or not payload.guild_id:
-        return
+    if payload.data.get('author') and not payload.data['author']['bot']:
+        # Get the message's guild and log channel
+        guild = bot.get_guild(payload.data['guild_id'])
+        log_channel = guild.get_channel(int(LOG_CHANNEL_ID))
 
-    # Get the message's guild and log channel
-    guild = bot.get_guild(payload.guild_id)
-    log_channel = guild.get_channel(int(LOG_CHANNEL_ID))
+        # Get the original message and the new message
+        try:
+            original_message = await log_channel.fetch_message(payload.message_id)
+            new_message = await payload.channel.fetch_message(payload.message_id)
 
-    # Get the original message and the new message
-    original_message = await log_channel.fetch_message(payload.message_id)
-    new_message = await payload.channel.fetch_message(payload.message_id)
+            # Create an embed to log the edited message
+            embed = discord.Embed(title="Message Edited", description=f"Message edited in {payload.data['channel_id']}", color=0xFFA500)
+            embed.add_field(name="Author", value=f"{new_message.author.mention} ({new_message.author})", inline=False)
+            embed.add_field(name="Original Message", value=original_message.content, inline=False)
+            embed.add_field(name="Edited Message", value=new_message.content, inline=False)
+            embed.set_footer(text=f"Edited at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
-    # Create an embed to log the edited message
-    embed = discord.Embed(title="Message Edited", description=f"Message edited in {payload.channel.mention}", color=0xFFA500)
-    embed.add_field(name="Author", value=f"{new_message.author.mention} ({new_message.author})", inline=False)
-    embed.add_field(name="Original Message", value=original_message.content, inline=False)
-    embed.add_field(name="Edited Message", value=new_message.content, inline=False)
-    embed.set_footer(text=f"Edited at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            # Send the embed to the log channel
+            await log_channel.send(embed=embed)
+        except Exception as e:
+            print(e)
 
-    # Send the embed to the log channel
+@bot.event
+async def on_guild_channel_delete(channel):
+    log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
+    channel_name = channel.name
+    embed = discord.Embed(title="Channel Deleted", description=f"Channel '{channel_name}' was deleted.", color=discord.Color.red())
+    embed.set_footer(text=f"Guild ID: {channel.guild.id} | Deleted at {datetime.utcnow()}")
+    log_channel = bot.get_channel(log_channel_id)
+    await log_channel.send(embed=embed)
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
+    if before.name != after.name:
+        embed = discord.Embed(title="Channel Renamed", description=f"Channel '{before.name}' was renamed to '{after.name}'.", color=discord.Color.blue())
+    else:
+        embed = discord.Embed(title="Channel Edited", description=f"Channel '{before.name}' was edited.", color=discord.Color.blue())
+    embed.set_footer(text=f"Guild ID: {before.guild.id} | Edited at {datetime.utcnow()}")
+    log_channel = bot.get_channel(log_channel_id)
+    await log_channel.send(embed=embed)
+
+@bot.event
+async def on_guild_role_create(role):
+    log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
+    role_name = role.name
+    embed = discord.Embed(title="Role Created", description=f"Role '{role_name}' was created.", color=discord.Color.green())
+    embed.set_footer(text=f"Guild ID: {role.guild.id} | Created at {datetime.utcnow()}")
+    log_channel = bot.get_channel(log_channel_id)
+    await log_channel.send(embed=embed)
+
+@bot.event
+async def on_guild_role_delete(role):
+    log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
+    role_name = role.name
+    embed = discord.Embed(title="Role Deleted", description=f"Role '{role_name}' was deleted.", color=discord.Color.red())
+    embed.set_footer(text=f"Guild ID: {role.guild.id} | Deleted at {datetime.utcnow()}")
+    log_channel = bot.get_channel(log_channel_id)
+    await log_channel.send(embed=embed)
+
+@bot.event
+async def on_guild_role_update(before, after):
+    log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
+    if before.name != after.name:
+        embed = discord.Embed(title="Role Renamed", description=f"Role '{before.name}' was renamed to '{after.name}'.", color=discord.Color.blue())
+    else:
+        embed = discord.Embed(title="Role Edited", description=f"Role '{before.name}' was edited.", color=discord.Color.blue())
+    embed.set_footer(text=f"Guild ID: {before.guild.id} | Edited at {datetime.utcnow()}")
+    log_channel = bot.get_channel(log_channel_id)
+    await log_channel.send(embed=embed)
+
+@bot.event
+async def on_guild_channel_create(channel):
+    log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
+    channel_name = channel.name
+    embed = discord.Embed(title="Channel Created", description=f"Channel '{channel_name}' was created.", color=discord.Color.green())
+    embed.set_footer(text=f"Guild ID: {channel.guild.id} | Created at {datetime.utcnow()}")
+    log_channel = bot.get_channel(log_channel_id)
+    await log_channel.send(embed=embed)
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
+    channel_name = channel.name
+    embed = discord.Embed(title="Channel Deleted", description=f"Channel '{channel_name}' was deleted.", color=discord.Color.red())
+    embed.set_footer(text=f"Guild ID: {channel.guild.id} | Deleted at {datetime.utcnow()}")
+    log_channel = bot.get_channel(log_channel_id)
+    await log_channel.send(embed=embed)
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    log_channel_id = int(os.getenv('LOG_CHANNEL_ID'))
+    if before.name != after.name:
+        embed = discord.Embed(title="Channel Renamed", description=f"Channel '{before.name}' was renamed to '{after.name}'.", color=discord.Color.blue())
+    else:
+        embed = discord.Embed(title="Channel Edited", description=f"Channel '{before.name}' was edited.", color=discord.Color.blue())
+    embed.set_footer(text=f"Guild ID: {before.guild.id} | Edited at {datetime.utcnow()}")
+    log_channel = bot.get_channel(log_channel_id)
     await log_channel.send(embed=embed)
 
 bot.run(TOKEN)
